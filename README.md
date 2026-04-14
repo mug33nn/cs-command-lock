@@ -16,7 +16,7 @@ The script uses Aggressor Script `alias` to intercept beacon commands before the
   Reason  : Process injection requires senior operator approval
   Contact a senior operator if this is required.
 ```
-
+![description](img1.png)
 ---
 
 ## Files
