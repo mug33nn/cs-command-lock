@@ -1,4 +1,4 @@
-# CS-Command-Lock
+# Cobalt Strike-Command-Lock
 
 A Cobalt Strike Aggressor (CNA) script that implements role-based command blocking for red team operations.
 
