@@ -223,8 +223,3 @@ If you load a new BOF CNA after `command_lock.cna`, unload and reload `command_l
 - Cobalt Strike 4.x
 - Aggressor Script support (built-in to CS)
 
----
-
-## Disclaimer
-
-This tool is intended for authorized red team operations only. Use responsibly and only on systems you have explicit permission to test.
