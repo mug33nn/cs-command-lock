@@ -1,0 +1,52 @@
+# Blocklist - managed by senior operators
+# Format: TYPE|PATTERN|REASON
+#
+# TYPE options:
+#   command   - blocks a built-in beacon command entirely (pattern = command name)
+#   shell     - blocks shell commands containing pattern
+#   powershell- blocks powershell commands containing pattern
+#   run       - blocks run commands containing pattern
+#   any       - blocks across shell/powershell/run if pattern found in args
+#
+# PATTERN: exact command name (for 'command' type) or substring match (others)
+# REASON  : shown to operator when blocked
+
+# --- Fully blocked built-in beacon commands ---
+command|inject|Process injection requires senior operator approval
+command|shinject|Shellcode injection requires senior operator approval
+command|shspawn|Shellcode spawn requires senior operator approval
+command|spawnas|Spawn-as requires senior operator approval
+command|spawnu|Spawnu requires senior operator approval
+command|migrate|Migration requires senior operator approval
+command|psinject|PS injection requires senior operator approval
+command|dcsync|DCSync is high-risk - requires senior operator approval
+command|hashdump|Hashdump triggers EDR alerts - requires senior operator approval
+command|mimikatz|Mimikatz requires senior operator approval
+command|jump|Lateral movement requires senior operator approval
+command|remote-exec|Remote execution requires senior operator approval
+command|getsystem|Privilege escalation requires senior operator approval
+
+# --- Shell command pattern blocks ---
+shell|net stop|Stopping services may disrupt target operations
+shell|sc stop|Stopping services may disrupt target operations
+shell|sc delete|Deleting services may disrupt target operations
+shell|taskkill /f|Force killing processes may cause instability
+shell|shutdown|Shutting down target will kill beacon
+shell|format |Destructive - do not format drives
+shell|del /f /s /q c:\\|Mass file deletion not permitted
+shell|rd /s /q c:\\|Mass directory removal not permitted
+shell|reg delete hklm|Deleting system registry keys not permitted
+shell|bcdedit|Modifying boot config may brick target
+shell|vssadmin delete|Deleting shadow copies not permitted
+shell|whoami|Whoami reveals user context - OPSEC risk
+
+# --- PowerShell pattern blocks ---
+powershell|stop-service|Stopping services may disrupt target operations
+powershell|stop-process -force|Force killing processes may cause instability
+powershell|remove-item -recurse -force c:\\|Mass deletion not permitted
+powershell|restart-computer|Rebooting target will kill beacon
+powershell|stop-computer|Shutting down target will kill beacon
+
+# --- Run pattern blocks ---
+run|shutdown|Shutting down target will kill beacon
+run|format|Destructive - do not format drives

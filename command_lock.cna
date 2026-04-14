@@ -1,0 +1,425 @@
+# command_lock.cna
+# Role-based command blocking for Cobalt Strike
+# Blocks built-in beacon commands, shell, powershell, and run
+#
+# Management commands (senior operators only):
+#   lock-list                          - Show all block rules
+#   lock-add <type> <pattern> <reason> - Add a rule
+#   lock-remove <pattern>              - Remove a rule
+#   lock-reload                        - Reload blocklist.txt from disk
+#   lock-who                           - Show your role + senior list
+#   lock-addsenior <user>              - Add senior operator
+#   lock-removesenior <user>           - Remove senior operator
+#   lock-help                          - Show help
+
+# ---------------------------------------------------------------
+# CONFIGURATION - edit these before loading
+# ---------------------------------------------------------------
+
+global('$BLOCKLIST_FILE');
+$BLOCKLIST_FILE = script_resource("blocklist.txt");
+
+# Cobalt Strike operator nicks that are senior
+global('@SENIOR_OPERATORS');
+@SENIOR_OPERATORS = @("lead", "senior", "teamlead", "admin");
+
+# ---------------------------------------------------------------
+# BLOCKLIST STATE
+# ---------------------------------------------------------------
+
+global('@BLOCKLIST');
+@BLOCKLIST = @();
+
+sub load_file_into_blocklist {
+    local('$file $handle $line @parts');
+    $file = $1;
+    if (!-exists $file) { return; }
+    $handle = openf($file);
+    while $line (readln($handle)) {
+        $line = ["$line" trim];
+        if (strlen($line) == 0 || left($line, 1) eq "#") { continue; }
+        @parts = split("\\|", $line);
+        if (size(@parts) >= 3) {
+            push(@BLOCKLIST, %(
+                type    => lc(@parts[0]),
+                pattern => lc(@parts[1]),
+                reason  => @parts[2]
+            ));
+        }
+    }
+    closef($handle);
+}
+
+sub load_blocklist {
+    @BLOCKLIST = @();
+
+    # Load base blocklist
+    if (!-exists $BLOCKLIST_FILE) {
+        show_message("[COMMAND LOCK] ERROR: blocklist file not found:\n$BLOCKLIST_FILE");
+        return;
+    }
+    load_file_into_blocklist($BLOCKLIST_FILE);
+
+    # Load runtime additions (from lock-add/lock-remove) if exists
+    local('$runtime');
+    $runtime = script_resource("blocklist_runtime.txt");
+    if (-exists $runtime) {
+        load_file_into_blocklist($runtime);
+    }
+}
+
+sub save_blocklist {
+    local('$handle $entry $savefile');
+
+    # Safety check - never save an empty blocklist
+    if (size(@BLOCKLIST) == 0) {
+        show_message("[COMMAND LOCK] WARNING: Refusing to save empty blocklist - possible load error.");
+        return;
+    }
+
+    # Save to a separate file, never overwrite the original
+    $savefile = script_resource("blocklist_runtime.txt");
+    $handle = openf(">$savefile");
+    writeln($handle, "# Blocklist - runtime changes by senior operators");
+    writeln($handle, "# Format: TYPE|PATTERN|REASON");
+    writeln($handle, "#");
+    foreach $entry (@BLOCKLIST) {
+        writeln($handle, $entry['type'] . "|" . $entry['pattern'] . "|" . $entry['reason']);
+    }
+    closef($handle);
+}
+
+# ---------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------
+
+sub is_senior {
+    local('$u $nick');
+    $nick = lc(mynick());
+    foreach $u (@SENIOR_OPERATORS) {
+        if ($u eq $nick) { return 1; }
+    }
+    return 0;
+}
+
+# Check if a built-in command name is fully blocked
+sub is_command_blocked {
+    local('$name $entry');
+    $name = lc($1);
+    foreach $entry (@BLOCKLIST) {
+        if ($entry['type'] eq "command" && $entry['pattern'] eq $name) {
+            return $entry['reason'];
+        }
+    }
+    return $null;
+}
+
+# Check if shell/powershell/run args contain a blocked pattern
+sub is_pattern_blocked {
+    local('$type $cmd $entry $check_types');
+    $type = lc($1);
+    $cmd  = lc($2);
+
+    foreach $entry (@BLOCKLIST) {
+        $check_types = @($type, "any");
+        if (indexOf($check_types, $entry['type']) !is $null) {
+            if (indexOf($cmd, $entry['pattern']) !is $null) {
+                return $entry['reason'];
+            }
+        }
+    }
+    return $null;
+}
+
+sub block_msg {
+    local('$bid $label $reason');
+    $bid    = $1;
+    $label  = $2;
+    $reason = $3;
+    berror($bid, "\n[COMMAND LOCK] Blocked by OPSEC policy");
+    berror($bid, "  Command : $label");
+    berror($bid, "  Reason  : $reason");
+    berror($bid, "  Contact a senior operator if this is required.\n");
+}
+
+# ---------------------------------------------------------------
+# BUILT-IN BEACON COMMAND INTERCEPTION
+# Each alias checks is_command_blocked(), then passes through
+# ---------------------------------------------------------------
+
+alias inject {
+    local('$reason');
+    $reason = is_command_blocked("inject");
+    if ($reason !is $null) { block_msg($1, "inject " . $2 . " " . $3, $reason); return; }
+    binject($1, $2, $3);
+}
+
+alias shinject {
+    local('$reason $data $handle');
+    $reason = is_command_blocked("shinject");
+    if ($reason !is $null) { block_msg($1, "shinject " . $2 . " " . $3, $reason); return; }
+    $handle = openf($4);
+    $data   = readb($handle, -1);
+    closef($handle);
+    bshinject($1, $2, $3, $data);
+}
+
+alias shspawn {
+    local('$reason $data $handle');
+    $reason = is_command_blocked("shspawn");
+    if ($reason !is $null) { block_msg($1, "shspawn " . $2, $reason); return; }
+    $handle = openf($3);
+    $data   = readb($handle, -1);
+    closef($handle);
+    bshspawn($1, $2, $data);
+}
+
+alias powerpick {
+    local('$reason');
+    $reason = is_command_blocked("powerpick");
+    if ($reason !is $null) { block_msg($1, "powerpick " . $2, $reason); return; }
+    bpowerpick($1, $2, $3);
+}
+
+alias psinject {
+    local('$reason');
+    $reason = is_command_blocked("psinject");
+    if ($reason !is $null) { block_msg($1, "psinject " . $2 . " " . $3, $reason); return; }
+    bpsinject($1, $2, $3, $4);
+}
+
+alias spawnas {
+    local('$reason');
+    $reason = is_command_blocked("spawnas");
+    if ($reason !is $null) { block_msg($1, "spawnas " . $2 . "\\" . $3, $reason); return; }
+    bspawnas($1, $2, $3, $4, $5, $6);
+}
+
+alias spawnu {
+    local('$reason');
+    $reason = is_command_blocked("spawnu");
+    if ($reason !is $null) { block_msg($1, "spawnu " . $2 . " " . $3, $reason); return; }
+    bspawnu($1, $2, $3);
+}
+
+alias migrate {
+    local('$reason');
+    $reason = is_command_blocked("migrate");
+    if ($reason !is $null) { block_msg($1, "migrate " . $2, $reason); return; }
+    bmigrate($1, $2, $3);
+}
+
+alias hashdump {
+    local('$reason');
+    $reason = is_command_blocked("hashdump");
+    if ($reason !is $null) { block_msg($1, "hashdump", $reason); return; }
+    bhashdump($1);
+}
+
+alias dcsync {
+    local('$reason');
+    $reason = is_command_blocked("dcsync");
+    if ($reason !is $null) { block_msg($1, "dcsync " . $2 . " " . $3, $reason); return; }
+    bdcsync($1, $2, $3);
+}
+
+alias jump {
+    local('$reason');
+    $reason = is_command_blocked("jump");
+    if ($reason !is $null) { block_msg($1, "jump " . $2 . " " . $3, $reason); return; }
+    bjump($1, $2, $3, $4);
+}
+
+alias remote-exec {
+    local('$reason');
+    $reason = is_command_blocked("remote-exec");
+    if ($reason !is $null) { block_msg($1, "remote-exec " . $2 . " " . $3, $reason); return; }
+    bremote_exec($1, $2, $3, $4);
+}
+
+alias getsystem {
+    local('$reason');
+    $reason = is_command_blocked("getsystem");
+    if ($reason !is $null) { block_msg($1, "getsystem", $reason); return; }
+    bgetsystem($1);
+}
+
+alias logonpasswords {
+    local('$reason');
+    $reason = is_command_blocked("logonpasswords");
+    if ($reason !is $null) { block_msg($1, "logonpasswords", $reason); return; }
+    blogonpasswords($1);
+}
+
+alias mimikatz {
+    local('$reason');
+    $reason = is_command_blocked("mimikatz");
+    if ($reason !is $null) { block_msg($1, "mimikatz " . $2, $reason); return; }
+    bmimikatz($1, $2);
+}
+
+alias execute-assembly {
+    local('$reason $data $handle');
+    $reason = is_command_blocked("execute-assembly");
+    if ($reason !is $null) { block_msg($1, "execute-assembly " . $2, $reason); return; }
+    $handle = openf($2);
+    $data   = readb($handle, -1);
+    closef($handle);
+    bexecute_assembly($1, $data, $3);
+}
+
+# ---------------------------------------------------------------
+# SHELL / POWERSHELL / RUN - pattern-based blocking
+# ---------------------------------------------------------------
+
+alias shell {
+    local('$reason $cmd');
+    $cmd = join(" ", subarray(@_, 1));
+    # Check if shell command is fully blocked
+    $reason = is_command_blocked("shell");
+    if ($reason !is $null) { block_msg($1, "shell " . $cmd, $reason); return; }
+    # Check if args contain a blocked pattern
+    $reason = is_pattern_blocked("shell", $cmd);
+    if ($reason !is $null) { block_msg($1, "shell " . $cmd, $reason); return; }
+    bshell($1, $cmd);
+}
+
+alias powershell {
+    local('$reason $cmd');
+    $cmd = join(" ", subarray(@_, 1));
+    # Check if powershell command is fully blocked
+    $reason = is_command_blocked("powershell");
+    if ($reason !is $null) { block_msg($1, "powershell " . $cmd, $reason); return; }
+    # Check if args contain a blocked pattern
+    $reason = is_pattern_blocked("powershell", $cmd);
+    if ($reason !is $null) { block_msg($1, "powershell " . $cmd, $reason); return; }
+    bpowershell($1, $cmd);
+}
+
+alias run {
+    local('$reason $cmd');
+    $cmd = join(" ", subarray(@_, 1));
+    # Check if run command is fully blocked
+    $reason = is_command_blocked("run");
+    if ($reason !is $null) { block_msg($1, "run " . $cmd, $reason); return; }
+    # Check if args contain a blocked pattern
+    $reason = is_pattern_blocked("run", $cmd);
+    if ($reason !is $null) { block_msg($1, "run " . $cmd, $reason); return; }
+    brun($1, $cmd);
+}
+
+# ---------------------------------------------------------------
+# MANAGEMENT COMMANDS
+# ---------------------------------------------------------------
+
+alias lock-list {
+    local('$out $entry $i');
+    $out  = "\n[COMMAND LOCK] Active rules (" . size(@BLOCKLIST) . " total):\n\n";
+    $out .= "  " . lpad("#", 4) . lpad("TYPE", 14) . lpad("PATTERN", 35) . "REASON\n";
+    $out .= "  " . ("-" x 85) . "\n";
+    $i = 1;
+    foreach $entry (@BLOCKLIST) {
+        $out .= "  " . lpad($i, 4) . lpad($entry['type'], 14) . lpad($entry['pattern'], 35) . $entry['reason'] . "\n";
+        $i++;
+    }
+    show_message($out);
+}
+
+alias lock-add {
+    if (!is_senior()) {
+        show_message("[COMMAND LOCK] Access denied. Senior operators only.");
+        return;
+    }
+    if (size(@_) < 4) {
+        show_message("[COMMAND LOCK] Usage: lock-add <type> <pattern> <reason>\n  Types: command, shell, powershell, run, any");
+        return;
+    }
+    push(@BLOCKLIST, %(type => lc($2), pattern => lc($3), reason => $4));
+    save_blocklist();
+    show_message("[COMMAND LOCK] Rule added by " . mynick() . ": " . $2 . " | " . $3 . " | " . $4);
+}
+
+alias lock-remove {
+    local('@new $entry $removed');
+    if (!is_senior()) {
+        show_message("[COMMAND LOCK] Access denied. Senior operators only.");
+        return;
+    }
+    if (size(@_) < 2) {
+        show_message("[COMMAND LOCK] Usage: lock-remove <pattern>");
+        return;
+    }
+    @new = @(); $removed = 0;
+    foreach $entry (@BLOCKLIST) {
+        if ($entry['pattern'] eq lc($2)) { $removed = 1; }
+        else { push(@new, $entry); }
+    }
+    if ($removed) {
+        @BLOCKLIST = @new;
+        save_blocklist();
+        show_message("[COMMAND LOCK] Rule removed by " . mynick() . ": " . $2);
+    } else {
+        show_message("[COMMAND LOCK] Pattern not found: " . $2);
+    }
+}
+
+alias lock-reload {
+    load_blocklist();
+    show_message("[COMMAND LOCK] Reloaded by " . mynick() . ". " . size(@BLOCKLIST) . " rules active.");
+}
+
+alias lock-who {
+    local('$out $role $nick');
+    $nick = lc(mynick());
+    $role = iff(is_senior(), "SENIOR", "operator");
+    $out  = "\n[COMMAND LOCK] Senior operators: " . join(", ", @SENIOR_OPERATORS) . "\n";
+    $out .= "Your nick : " . $nick . " (" . $role . ")\n";
+    show_message($out);
+}
+
+alias lock-addsenior {
+    if (!is_senior()) { show_message("[COMMAND LOCK] Access denied."); return; }
+    if (size(@_) < 2) { show_message("[COMMAND LOCK] Usage: lock-addsenior <nick>"); return; }
+    if (indexOf(@SENIOR_OPERATORS, lc($2)) !is $null) {
+        show_message("[COMMAND LOCK] " . $2 . " is already a senior operator.");
+        return;
+    }
+    push(@SENIOR_OPERATORS, lc($2));
+    show_message("[COMMAND LOCK] Added senior operator: " . $2);
+}
+
+alias lock-removesenior {
+    local('@new $u');
+    if (!is_senior()) { show_message("[COMMAND LOCK] Access denied."); return; }
+    if (size(@_) < 2) { show_message("[COMMAND LOCK] Usage: lock-removesenior <nick>"); return; }
+    @new = @();
+    foreach $u (@SENIOR_OPERATORS) {
+        if ($u ne lc($2)) { push(@new, $u); }
+    }
+    @SENIOR_OPERATORS = @new;
+    show_message("[COMMAND LOCK] Removed senior operator: " . $2);
+}
+
+alias lock-help {
+    local('$out');
+    $out  = "\n[COMMAND LOCK] Commands:\n\n";
+    $out .= "  lock-list                           Show all block rules\n";
+    $out .= "  lock-add <type> <pattern> <reason>  Add a rule (senior only)\n";
+    $out .= "  lock-remove <pattern>               Remove a rule (senior only)\n";
+    $out .= "  lock-reload                         Reload blocklist.txt from disk\n";
+    $out .= "  lock-who                            Show your role and senior list\n";
+    $out .= "  lock-addsenior <nick>               Add senior operator (senior only)\n";
+    $out .= "  lock-removesenior <nick>            Remove senior operator (senior only)\n\n";
+    $out .= "  Types: command, shell, powershell, run, any\n\n";
+    $out .= "  Examples:\n";
+    $out .= "    lock-add command inject Injection requires approval\n";
+    $out .= "    lock-add shell whoami OPSEC risk\n";
+    $out .= "    lock-remove inject\n";
+    show_message($out);
+}
+
+# ---------------------------------------------------------------
+# STARTUP
+# ---------------------------------------------------------------
+load_blocklist();
+show_message("[COMMAND LOCK] Loaded. " . size(@BLOCKLIST) . " rules active. Your role: " . (is_senior() ? "SENIOR" : "operator") . ". Type lock-help for commands.");
